@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>IGNITE | MODIS & VIIRS Harmonized Burning Activity Calendar</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    <style>
+        body {
+            background-color: #090d16;
+            color: #e2e8f0;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+
+        .card {
+            background-color: #111827;
+            border: 1px solid #1f2937;
+            border-radius: 0.75rem;
+        }
+
+        .cal-cell {
+            transition: transform 0.12s ease, outline 0.12s ease;
+            cursor: pointer;
+        }
+
+        .cal-cell:hover {
+            transform: scale(1.18);
+            outline: 2px solid #f97316;
+            z-index: 20;
+            position: relative;
+        }
+
+        #map {
+            height: 340px;
+            width: 100%;
+            border-radius: 0.5rem;
+            z-index: 1;
+        }
+
+        .crosshair-cursor {
+            cursor: crosshair !important;
+        }
+    </style>
+</head>
+
+<body class="min-h-screen flex flex-col">
+
+    <!-- Top Navigation Bar -->
+    <header class="border-b border-slate-800 bg-slate-950/90 backdrop-blur sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-4">
+            <div class="flex items-center gap-3">
+                <div
+                    class="w-9 h-9 rounded-lg bg-gradient-to-br from-orange-500 to-red-600 flex items-center justify-center font-bold text-white shadow-lg shadow-orange-500/20">
+                    🔥
+                </div>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <h1 class="text-lg font-bold tracking-tight text-white">IGNITE</h1>
+                        <span
+                            class="text-xs px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-400 border border-orange-500/30 font-medium">
+                            Challenge #08 • MODIS & VIIRS Harmonization
+                        </span>
+                    </div>
+                    <p class="text-xs text-slate-400">Multi-Sensor Spatio-Temporal Fire Regime Calendar (2000–2026)</p>
+                </div>
+            </div>
+
+            <div class="flex flex-wrap items-center gap-2">
+                <!-- Sensor Mode Toggle -->
+                <div class="bg-slate-900 p-1 rounded-lg border border-slate-700 flex text-xs font-medium">
+                    <button id="btnModeHarmonized" onclick="setMode('harmonized')"
+                        class="px-3 py-1.5 rounded-md bg-orange-600 text-white shadow">
+                        Harmonized (1km Eq.)
+                    </button>
+                    <button id="btnModeRaw" onclick="setMode('raw')"
+                        class="px-3 py-1.5 rounded-md text-slate-400 hover:text-white">
+                        Raw Unharmonized
+                    </button>
+                </div>
+
+                <!-- Accessible Color Ramp Selector -->
+                <select id="rampSelect" onchange="renderAll()"
+                    class="bg-slate-900 border border-slate-700 text-xs rounded-lg px-2.5 py-2 text-slate-200 focus:outline-none focus:border-orange-500">
+                    <option value="viridis">Color Ramp: Viridis (Colorblind-Safe)</option>
+                    <option value="thermal">Color Ramp: Thermal Fire</option>
+                </select>
+
+                <!-- CSV Export -->
+                <button onclick="downloadCSV()"
+                    class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3.5 py-2 rounded-lg flex items-center gap-1.5 transition">
+                    <span>⬇ Export CSV</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="max-w-7xl mx-auto px-4 py-6 flex-1 w-full space-y-6">
+
+        <!-- Filter Control Bar -->
+        <section class="card p-4 flex flex-wrap items-end justify-between gap-4">
+            <div class="flex flex-wrap items-center gap-4">
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1 font-medium">Region of Interest</label>
+                    <select id="regionSelect" onchange="onRegionChange()"
+                        class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:border-orange-500 focus:outline-none">
+                        <option value="All Pakistan">All Pakistan (National)</option>
+                        <option value="Punjab">Punjab (Crop Residue Belt)</option>
+                        <option value="Sindh">Sindh (Indus Delta & Plains)</option>
+                        <option value="Balochistan">Balochistan (Arid Southwest)</option>
+                        <option value="KP & North">KP & Northern Forests</option>
+                    </select>
+                </div>
+
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1 font-medium">Start Year</label>
+                    <select id="startYearSelect" onchange="renderAll()"
+                        class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"></select>
+                </div>
+
+                <div>
+                    <label class="block text-xs text-slate-400 mb-1 font-medium">End Year</label>
+                    <select id="endYearSelect" onchange="renderAll()"
+                        class="bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white"></select>
+                </div>
+            </div>
+
+            <div id="statusBadge"
+                class="text-xs text-slate-400 bg-slate-900/90 px-3 py-2 rounded-lg border border-slate-800">
+                Loading 1.28M+ satellite records...
+            </div>
+        </section>
+
+        <!-- 4 KPI Cards -->
+        <section class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div class="card p-4">
+                <p class="text-xs text-slate-400 uppercase tracking-wider">Latest Period vs. Median</p>
+                <div class="mt-2 flex items-baseline justify-between">
+                    <h2 id="kpiAnomalyVal" class="text-2xl font-bold text-white">--</h2>
+                    <span id="kpiAnomalyBadge"
+                        class="text-xs px-2 py-0.5 rounded font-semibold bg-slate-800 text-slate-300">--</span>
+                </div>
+                <p id="kpiAnomalySub" class="text-xs text-slate-400 mt-1">Comparing recent activity to 25-yr median</p>
+            </div>
+
+            <div class="card p-4">
+                <p class="text-xs text-slate-400 uppercase tracking-wider">Selected Range Volume</p>
+                <h2 id="kpiTotalCount" class="text-2xl font-bold text-orange-400 mt-2">--</h2>
+                <p id="kpiTotalSub" class="text-xs text-slate-400 mt-1">Harmonized 1km fire cell-days</p>
+            </div>
+
+            <div class="card p-4">
+                <p class="text-xs text-slate-400 uppercase tracking-wider">Peak Burning Month</p>
+                <h2 id="kpiPeakMonth" class="text-2xl font-bold text-amber-400 mt-2">--</h2>
+                <p id="kpiPeakSub" class="text-xs text-slate-400 mt-1">Highest historical median intensity</p>
+            </div>
+
+            <div class="card p-4">
+                <p class="text-xs text-slate-400 uppercase tracking-wider">Sub-Pixel Bias Removed</p>
+                <h2 id="kpiNoiseReduction" class="text-2xl font-bold text-emerald-400 mt-2">--</h2>
+                <p class="text-xs text-slate-400 mt-1">375m VIIRS oversampling normalized to 1km</p>
+            </div>
+        </section>
+
+        <!-- Main Grid: Burning Activity Calendar + Interactive Map -->
+        <section class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+            <!-- Burning Activity Calendar Heatmap -->
+            <div class="card p-5 lg:col-span-7 flex flex-col justify-between">
+                <div>
+                    <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+                        <div>
+                            <h3 class="text-base font-bold text-white">Burning Activity Calendar (Year × Month)</h3>
+                            <p class="text-xs text-slate-400">Hover any cell to inspect hotspot counts & historical
+                                median deviation</p>
+                        </div>
+                        <!-- Legend -->
+                        <div class="flex items-center gap-1.5 text-[11px] text-slate-400">
+                            <span>Low</span>
+                            <div id="legendBar" class="flex h-3 w-28 rounded overflow-hidden"></div>
+                            <span>Extreme</span>
+                        </div>
+                    </div>
+
+                    <!-- Tooltip readout bar -->
+                    <div id="cellInspector"
+                        class="mb-3 px-3 py-2 rounded-lg bg-slate-900/90 border border-slate-800 text-xs text-slate-300 flex flex-wrap justify-between gap-2">
+                        <span>Hover over any month cell below to inspect exact harmonized metrics and anomaly
+                            percentages.</span>
+                    </div>
+
+                    <!-- Heatmap Grid Container -->
+                    <div class="overflow-x-auto">
+                        <div id="calendarGrid" class="min-w-[500px] space-y-1"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Interactive Map & Drawing / Bounding Box Filter -->
+            <div class="card p-5 lg:col-span-5 flex flex-col justify-between space-y-3">
+                <div>
+                    <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+                        <div>
+                            <h3 class="text-base font-bold text-white">Spatial Hotspot Map</h3>
+                            <p class="text-xs text-slate-400">Draw a box on map or enter coordinates</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button id="btnDrawBox" onclick="toggleDrawMode()"
+                                class="text-xs bg-orange-600/20 hover:bg-orange-600/30 text-orange-400 border border-orange-500/40 px-2.5 py-1 rounded font-medium">
+                                ✏️ Draw Area
+                            </button>
+                            <button onclick="resetCustomBbox()"
+                                class="text-xs text-slate-400 hover:text-white underline">
+                                Reset
+                            </button>
+                        </div>
+                    </div>
+
+                    <div id="map"></div>
+                </div>
+
+                <!-- Custom Lat/Lon Bounding Box Inputs -->
+                <div class="bg-slate-900/80 p-3 rounded-lg border border-slate-800">
+                    <p class="text-[11px] font-semibold text-slate-300 mb-2">Bounding Box Coordinates (Drawn or Manual
+                        Input)</p>
+                    <div class="grid grid-cols-4 gap-2 text-xs">
+                        <input id="inMinLat" type="number" step="0.1" placeholder="Min Lat"
+                            class="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-white" />
+                        <input id="inMaxLat" type="number" step="0.1" placeholder="Max Lat"
+                            class="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-white" />
+                        <input id="inMinLon" type="number" step="0.1" placeholder="Min Lon"
+                            class="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-white" />
+                        <input id="inMaxLon" type="number" step="0.1" placeholder="Max Lon"
+                            class="bg-slate-950 border border-slate-700 rounded px-2 py-1 text-white" />
+                    </div>
+                    <div class="mt-2 flex items-center justify-between">
+                        <span id="bboxCountLabel" class="text-[11px] text-slate-400">Showing regional top
+                            hotspots</span>
+                        <button onclick="applyCustomBbox()"
+                            class="bg-slate-800 hover:bg-slate-700 text-white text-xs px-3 py-1 rounded border border-slate-600">
+                            Apply Box
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Bottom Row: Annual Trend Chart (2012 Jump Proof) + Holdout Validation Chart -->
+        <section class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+            <!-- Annual Time-Series Chart -->
+            <div class="card p-5 lg:col-span-7">
+                <div class="mb-3">
+                    <h3 class="text-base font-bold text-white">25-Year Fire Regime Continuity (2000–2026)</h3>
+                    <p class="text-xs text-slate-400">
+                        <span class="text-red-400 font-medium">Raw Detections</span> jump artificially in 2012 & 2018
+                        due to 375m VIIRS resolution, whereas <span class="text-orange-400 font-medium">Harmonized
+                            Counts</span> preserve the true 1km baseline.
+                    </p>
+                </div>
+                <div class="h-64">
+                    <canvas id="trendChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Scientific Validation & Methodology Card -->
+            <div class="card p-5 lg:col-span-5 flex flex-col justify-between">
+                <div>
+                    <h3 class="text-base font-bold text-white">Blind Holdout Validation (2019–2025)</h3>
+                    <p class="text-xs text-slate-400 mb-3">
+                        Calibrated strictly on 2012–2018 overlap years (α<sub>m</sub>), then tested blind on 2019–2025
+                        against actual MODIS observations.
+                    </p>
+                    <div class="h-44">
+                        <canvas id="validationChart"></canvas>
+                    </div>
+                </div>
+
+                <div class="mt-3 pt-3 border-t border-slate-800 text-[11px] text-slate-400 space-y-1">
+                    <p><strong class="text-slate-200">1. False-Positive Filtering:</strong> Isolates vegetation fires
+                        (<code>type=0</code>) & removes industrial gas flares + low-confidence noise.</p>
+                    <p><strong class="text-slate-200">2. Spatial Co-Aggregation:</strong> Maps 375m VIIRS & 1km MODIS
+                        onto a unified <code>0.01° × 0.01°</code> daily grid.</p>
+                    <p><strong class="text-slate-200">3. Monthly Calibration (α<sub>m</sub>):</strong> Normalizes VIIRS
+                        sensitivity & overpass differences into MODIS-equivalent units.</p>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <script>
+        let APP_DATA = null;
+        let currentMode = 'harmonized';
+        let map = null;
+        let markerLayer = null;
+        let bboxRect = null;
+        let trendChartInstance = null;
+        let valChartInstance = null;
+
+        // Interactive map drawing state
+        let isDrawingMode = false;
+        let drawStartLatLng = null;
+
+        const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+        const PROVINCE_BOUNDS = {
+            "All Pakistan": [[23.7, 60.9], [37.1, 77.8]],
+            "Punjab": [[27.7, 69.3], [34.0, 75.4]],
+            "Sindh": [[23.7, 66.7], [28.5, 71.1]],
+            "Balochistan": [[25.0, 60.9], [32.0, 70.2]],
+            "KP & North": [[31.5, 69.2], [37.1, 77.5]]
+        };
+
+        const RAMPS = {
+            viridis: ["#1e1b4b", "#3b528b", "#21918c", "#5ec962", "#fde725"],
+            thermal: ["#1e293b", "#7c2d12", "#c2410c", "#f97316", "#fef08a"]
+        };
+
+        function getCellColor(value, maxVal, rampKey) {
+            const colors = RAMPS[rampKey];
+            if (!value || value <= 0) return "#0f172a";
+            const ratio = Math.min(value / Math.max(maxVal, 1), 1);
+            const scaled = Math.sqrt(ratio);
+            const idx = Math.min(Math.floor(scaled * colors.length), colors.length - 1);
+            return colors[idx];
+        }
+
+        function updateLegend() {
+            const ramp = RAMPS[document.getElementById("rampSelect").value];
+            const bar = document.getElementById("legendBar");
+            bar.innerHTML = ramp.map(c => `<div style="background:${c}; flex:1;"></div>`).join("");
+        }
+
+        function initMap() {
+            map = L.map('map').setView([30.3753, 69.3451], 5);
+
+            // Keyless Esri Dark Gray & Satellite Basemaps (No API Key Required)
+            const darkBase = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}', {
+                attribution: 'Tiles © Esri',
+                maxZoom: 16
+            });
+            const darkLabels = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}', {
+                maxZoom: 16
+            });
+            const satelliteBase = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+                attribution: 'Tiles © Esri & Earthstar Geographics',
+                maxZoom: 17
+            });
+
+            const darkGroup = L.layerGroup([darkBase, darkLabels]).addTo(map);
+            L.control.layers({ "Dark Base Map": darkGroup, "Satellite Imagery": satelliteBase }).addTo(map);
+
+            markerLayer = L.layerGroup().addTo(map);
+
+            // Interactive Rectangle Drawing Handlers
+            map.on('mousedown', (e) => {
+                if (!isDrawingMode) return;
+                drawStartLatLng = e.latlng;
+                if (bboxRect) { map.removeLayer(bboxRect); bboxRect = null; }
+                bboxRect = L.rectangle([drawStartLatLng, drawStartLatLng], {
+                    color: "#f97316", weight: 2, fillOpacity: 0.15
+                }).addTo(map);
+            });
+
+            map.on('mousemove', (e) => {
+                if (!isDrawingMode || !drawStartLatLng || !bboxRect) return;
+                bboxRect.setBounds([drawStartLatLng, e.latlng]);
+            });
+
+            map.on('mouseup', (e) => {
+                if (!isDrawingMode || !drawStartLatLng) return;
+                const b = L.latLngBounds(drawStartLatLng, e.latlng);
+                drawStartLatLng = null;
+                toggleDrawMode(false);
+
+                const minLat = parseFloat(b.getSouth().toFixed(2));
+                const maxLat = parseFloat(b.getNorth().toFixed(2));
+                const minLon = parseFloat(b.getWest().toFixed(2));
+                const maxLon = parseFloat(b.getEast().toFixed(2));
+
+                if (Math.abs(maxLat - minLat) < 0.05 || Math.abs(maxLon - minLon) < 0.05) return;
+
+                document.getElementById("inMinLat").value = minLat;
+                document.getElementById("inMaxLat").value = maxLat;
+                document.getElementById("inMinLon").value = minLon;
+                document.getElementById("inMaxLon").value = maxLon;
+
+                const region = document.getElementById("regionSelect").value;
+                renderMapMarkers(APP_DATA.regions[region].map_hotspots, { minLat, maxLat, minLon, maxLon });
+            });
+        }
+
+        function toggleDrawMode(forceState = null) {
+            isDrawingMode = forceState !== null ? forceState : !isDrawingMode;
+            const btn = document.getElementById("btnDrawBox");
+            const mapEl = document.getElementById("map");
+            if (isDrawingMode) {
+                map.dragging.disable();
+                mapEl.classList.add("crosshair-cursor");
+                btn.textContent = "Drag on Map...";
+                btn.className = "text-xs bg-orange-600 text-white px-2.5 py-1 rounded font-medium animate-pulse";
+            } else {
+                map.dragging.enable();
+                mapEl.classList.remove("crosshair-cursor");
+                btn.textContent = "✏️ Draw Area";
+                btn.className = "text-xs bg-orange-600/20 hover:bg-orange-600/30 text-orange-400 border border-orange-500/40 px-2.5 py-1 rounded font-medium";
+            }
+        }
+
+        function setMode(mode) {
+            currentMode = mode;
+            const btnH = document.getElementById("btnModeHarmonized");
+            const btnR = document.getElementById("btnModeRaw");
+            if (mode === "harmonized") {
+                btnH.className = "px-3 py-1.5 rounded-md bg-orange-600 text-white shadow";
+                btnR.className = "px-3 py-1.5 rounded-md text-slate-400 hover:text-white";
+            } else {
+                btnR.className = "px-3 py-1.5 rounded-md bg-red-600 text-white shadow";
+                btnH.className = "px-3 py-1.5 rounded-md text-slate-400 hover:text-white";
+            }
+            renderAll();
+        }
+
+        function onRegionChange() {
+            const region = document.getElementById("regionSelect").value;
+            if (PROVINCE_BOUNDS[region] && map) {
+                map.flyToBounds(PROVINCE_BOUNDS[region], { padding: [20, 20], duration: 0.8 });
+            }
+            resetCustomBbox(false);
+            renderAll();
+        }
+
+        function renderMapMarkers(hotspots, customBounds = null) {
+            markerLayer.clearLayers();
+            if (bboxRect && !customBounds) { map.removeLayer(bboxRect); bboxRect = null; }
+
+            let filtered = hotspots;
+            if (customBounds) {
+                const { minLat, maxLat, minLon, maxLon } = customBounds;
+                filtered = hotspots.filter(p =>
+                    p.grid_lat >= minLat && p.grid_lat <= maxLat &&
+                    p.grid_lon >= minLon && p.grid_lon <= maxLon
+                );
+                if (bboxRect) map.removeLayer(bboxRect);
+                bboxRect = L.rectangle([[minLat, minLon], [maxLat, maxLon]], {
+                    color: "#f97316", weight: 2, fillOpacity: 0.1
+                }).addTo(map);
+                map.fitBounds(bboxRect.getBounds(), { padding: [20, 20] });
+            }
+
+            document.getElementById("bboxCountLabel").textContent =
+                `Showing ${filtered.length} high-intensity fire cells`;
+
+            filtered.forEach(pt => {
+                const sensors = (pt.has_modis && pt.has_viirs) ? "MODIS + VIIRS" : (pt.has_modis ? "MODIS" : "VIIRS");
+                const color = pt.mean_frp > 50 ? "#ef4444" : (pt.mean_frp > 20 ? "#f97316" : "#eab308");
+                L.circleMarker([pt.grid_lat, pt.grid_lon], {
+                    radius: Math.min(Math.max(Math.sqrt(pt.mean_frp) * 0.9, 4), 11),
+                    fillColor: color,
+                    color: "#000",
+                    weight: 0.6,
+                    fillOpacity: 0.85
+                })
+                    .bindPopup(`
+          <div style="color:#111; font-size:12px;">
+            <strong>Date:</strong> ${pt.acq_date}<br/>
+            <strong>Grid Cell (0.01°):</strong> ${pt.grid_lat}°, ${pt.grid_lon}°<br/>
+            <strong>Sensors:</strong> ${sensors}<br/>
+            <strong>Mean FRP:</strong> ${pt.mean_frp} MW<br/>
+            <strong>Harmonized Weight:</strong> ${pt.harmonized_count}
+          </div>
+        `)
+                    .addTo(markerLayer);
+            });
+        }
+
+        function applyCustomBbox() {
+            const minLat = parseFloat(document.getElementById("inMinLat").value);
+            const maxLat = parseFloat(document.getElementById("inMaxLat").value);
+            const minLon = parseFloat(document.getElementById("inMinLon").value);
+            const maxLon = parseFloat(document.getElementById("inMaxLon").value);
+            if ([minLat, maxLat, minLon, maxLon].some(isNaN)) {
+                alert("Please enter valid numeric values or use 'Draw Area' on the map.");
+                return;
+            }
+            const region = document.getElementById("regionSelect").value;
+            renderMapMarkers(APP_DATA.regions[region].map_hotspots, { minLat, maxLat, minLon, maxLon });
+        }
+
+        function resetCustomBbox(rerender = true) {
+            ["inMinLat", "inMaxLat", "inMinLon", "inMaxLon"].forEach(id => document.getElementById(id).value = "");
+            if (bboxRect) { map.removeLayer(bboxRect); bboxRect = null; }
+            if (rerender && APP_DATA) {
+                const region = document.getElementById("regionSelect").value;
+                renderMapMarkers(APP_DATA.regions[region].map_hotspots, null);
+            }
+        }
+
+        function renderAll() {
+            if (!APP_DATA) return;
+            updateLegend();
+
+            const region = document.getElementById("regionSelect").value;
+            const startY = parseInt(document.getElementById("startYearSelect").value);
+            const endY = parseInt(document.getElementById("endYearSelect").value);
+            const rampKey = document.getElementById("rampSelect").value;
+
+            const regObj = APP_DATA.regions[region];
+            const series = regObj.monthly_series.filter(r => r.year >= startY && r.year <= endY);
+            const medians = regObj.monthly_medians;
+
+            const lookup = {};
+            let maxCellVal = 0;
+            let totalSelected = 0;
+            let totalRawSelected = 0;
+
+            series.forEach(r => {
+                if (!lookup[r.year]) lookup[r.year] = {};
+                lookup[r.year][r.month] = r;
+                const val = currentMode === "harmonized" ? r.harmonized : r.raw;
+                if (val > maxCellVal) maxCellVal = val;
+                totalSelected += r.harmonized;
+                totalRawSelected += r.raw;
+            });
+
+            document.getElementById("kpiTotalCount").textContent = Math.round(totalSelected).toLocaleString();
+            document.getElementById("kpiTotalSub").textContent =
+                currentMode === "harmonized" ? "Harmonized MODIS-eq. cell-days" : `Raw detections (${totalRawSelected.toLocaleString()})`;
+
+            const reductionPct = totalRawSelected > 0
+                ? Math.round(((totalRawSelected - totalSelected) / totalRawSelected) * 100)
+                : 0;
+            document.getElementById("kpiNoiseReduction").textContent = `${reductionPct}%`;
+
+            let peakM = 1, peakMVal = 0;
+            for (let m = 1; m <= 12; m++) {
+                const mv = medians[String(m)] || 0;
+                if (mv > peakMVal) { peakMVal = mv; peakM = m; }
+            }
+            document.getElementById("kpiPeakMonth").textContent = MONTHS[peakM - 1];
+            document.getElementById("kpiPeakSub").textContent = `Median ${Math.round(peakMVal).toLocaleString()} harmonized cell-days`;
+
+            const latestRow = series[series.length - 1];
+            if (latestRow) {
+                const med = medians[String(latestRow.month)] || 1;
+                const pct = Math.round(((latestRow.harmonized - med) / Math.max(med, 1)) * 100);
+                document.getElementById("kpiAnomalyVal").textContent = `${Math.round(latestRow.harmonized).toLocaleString()}`;
+                const badge = document.getElementById("kpiAnomalyBadge");
+                badge.textContent = `${pct >= 0 ? "+" : ""}${pct}% vs median`;
+                badge.className = pct > 15
+                    ? "text-xs px-2 py-0.5 rounded font-semibold bg-red-500/20 text-red-400 border border-red-500/30"
+                    : "text-xs px-2 py-0.5 rounded font-semibold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30";
+                document.getElementById("kpiAnomalySub").textContent =
+                    `${MONTHS[latestRow.month - 1]} ${latestRow.year} (Median: ${Math.round(med).toLocaleString()})`;
+            }
+
+            const grid = document.getElementById("calendarGrid");
+            let html = `<div class="grid gap-1 text-[11px] text-slate-400 font-semibold pb-1" style="grid-template-columns: 48px repeat(12, minmax(0, 1fr));">
+        <div>Year</div>${MONTHS.map(m => `<div class="text-center">${m}</div>`).join("")}
+      </div>`;
+
+            for (let y = endY; y >= startY; y--) {
+                html += `<div class="grid gap-1 items-center" style="grid-template-columns: 48px repeat(12, minmax(0, 1fr));">
+          <div class="text-xs font-mono text-slate-400">${y}</div>`;
+                for (let m = 1; m <= 12; m++) {
+                    const rec = lookup[y]?.[m];
+                    const val = rec ? (currentMode === "harmonized" ? rec.harmonized : rec.raw) : 0;
+                    const bg = getCellColor(val, maxCellVal, rampKey);
+                    const med = medians[String(m)] || 0;
+                    const anom = rec && med > 0 ? Math.round(((rec.harmonized - med) / med) * 100) : 0;
+                    const harmVal = rec ? rec.harmonized : 0;
+                    const rawVal = rec ? rec.raw : 0;
+                    const frpVal = rec ? rec.mean_frp : 0;
+
+                    html += `<div
+            class="cal-cell h-6 rounded-sm flex items-center justify-center text-[10px] font-medium"
+            style="background-color: ${bg}; color: ${val > maxCellVal * 0.45 ? '#090d16' : '#cbd5e1'};"
+            onmouseenter="inspectCell('${MONTHS[m - 1]} ${y}', ${harmVal}, ${rawVal}, ${med}, ${anom}, ${frpVal})"
+          >${val > 0 ? (val >= 1000 ? (val / 1000).toFixed(1) + 'k' : Math.round(val)) : ''}</div>`;
+                }
+                html += `</div>`;
+            }
+            grid.innerHTML = html;
+
+            renderTrendChart(series, startY, endY);
+            renderMapMarkers(regObj.map_hotspots, null);
+        }
+
+        function inspectCell(label, harm, raw, med, anom, frp) {
+            const sign = anom >= 0 ? "+" : "";
+            const anomColor = anom > 20 ? "text-red-400" : (anom < -20 ? "text-emerald-400" : "text-amber-300");
+            document.getElementById("cellInspector").innerHTML = `
+        <span><strong class="text-white">${label}</strong></span>
+        <span>Harmonized: <strong class="text-orange-400">${harm.toLocaleString()}</strong></span>
+        <span>Raw: <strong class="text-slate-300">${raw.toLocaleString()}</strong></span>
+        <span>25-Yr Median: <strong class="text-slate-300">${med.toLocaleString()}</strong></span>
+        <span>Anomaly: <strong class="${anomColor}">${sign}${anom}%</strong></span>
+        <span>Mean FRP: <strong class="text-slate-300">${frp} MW</strong></span>
+      `;
+        }
+
+        function renderTrendChart(series, startY, endY) {
+            const years = [];
+            const harmYearly = [];
+            const rawYearly = [];
+
+            for (let y = startY; y <= endY; y++) {
+                years.push(y);
+                const rows = series.filter(r => r.year === y);
+                harmYearly.push(Math.round(rows.reduce((s, r) => s + r.harmonized, 0)));
+                rawYearly.push(Math.round(rows.reduce((s, r) => s + r.raw, 0)));
+            }
+
+            const ctx = document.getElementById("trendChart").getContext("2d");
+            if (trendChartInstance) trendChartInstance.destroy();
+            trendChartInstance = new Chart(ctx, {
+                type: "line",
+                data: {
+                    labels: years,
+                    datasets: [
+                        {
+                            label: "Harmonized MODIS-Eq. Cell-Days",
+                            data: harmYearly,
+                            borderColor: "#f97316",
+                            backgroundColor: "rgba(249, 115, 22, 0.15)",
+                            borderWidth: 2.5,
+                            fill: true,
+                            tension: 0.25
+                        },
+                        {
+                            label: "Raw Unharmonized Detections",
+                            data: rawYearly,
+                            borderColor: "#ef4444",
+                            borderDash: [5, 5],
+                            borderWidth: 1.8,
+                            pointRadius: 2,
+                            tension: 0.25
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { labels: { color: "#cbd5e1", font: { size: 11 } } } },
+                    scales: {
+                        x: { ticks: { color: "#94a3b8", font: { size: 10 } }, grid: { color: "#1e293b" } },
+                        y: { ticks: { color: "#94a3b8", font: { size: 10 } }, grid: { color: "#1e293b" } }
+                    }
+                }
+            });
+        }
+
+        function renderValidationChart() {
+            const valRows = APP_DATA.validation_2019_2025;
+            const ctx = document.getElementById("validationChart").getContext("2d");
+            if (valChartInstance) valChartInstance.destroy();
+            valChartInstance = new Chart(ctx, {
+                type: "bar",
+                data: {
+                    labels: valRows.map(r => r.year),
+                    datasets: [
+                        {
+                            label: "Actual MODIS Ground Truth",
+                            data: valRows.map(r => r.actual_modis),
+                            backgroundColor: "#38bdf8"
+                        },
+                        {
+                            label: "Predicted Harmonized (Calibrated 2012–18)",
+                            data: valRows.map(r => r.predicted_harmonized),
+                            backgroundColor: "#f97316"
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { labels: { color: "#cbd5e1", font: { size: 10 } } } },
+                    scales: {
+                        x: { ticks: { color: "#94a3b8", font: { size: 10 } }, grid: { display: false } },
+                        y: { ticks: { color: "#94a3b8", font: { size: 10 } }, grid: { color: "#1e293b" } }
+                    }
+                }
+            });
+        }
+
+        function downloadCSV() {
+            if (!APP_DATA) return;
+            const region = document.getElementById("regionSelect").value;
+            const startY = parseInt(document.getElementById("startYearSelect").value);
+            const endY = parseInt(document.getElementById("endYearSelect").value);
+            const rows = APP_DATA.regions[region].monthly_series.filter(r => r.year >= startY && r.year <= endY);
+            const medians = APP_DATA.regions[region].monthly_medians;
+
+            const header = ["region,year,month,month_name,harmonized_cell_days,raw_detections,historical_median,anomaly_pct,mean_frp_mw"];
+            const lines = rows.map(r => {
+                const med = medians[String(r.month)] || 0;
+                const anom = med > 0 ? (((r.harmonized - med) / med) * 100).toFixed(1) : "0.0";
+                return `"${region}",${r.year},${r.month},${MONTHS[r.month - 1]},${r.harmonized},${r.raw},${med},${anom},${r.mean_frp}`;
+            });
+
+            const blob = new Blob([header.concat(lines).join("\n")], { type: "text/csv" });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `IGNITE_${region.replace(/\s+/g, "_")}_${startY}_${endY}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        async function bootstrap() {
+            initMap();
+            try {
+                const resp = await fetch("dashboard_data.json");
+                APP_DATA = await resp.json();
+
+                const minY = APP_DATA.metadata.year_min;
+                const maxY = APP_DATA.metadata.year_max;
+                const sSel = document.getElementById("startYearSelect");
+                const eSel = document.getElementById("endYearSelect");
+
+                for (let y = minY; y <= maxY; y++) {
+                    sSel.innerHTML += `<option value="${y}" ${y === minY ? "selected" : ""}>${y}</option>`;
+                    eSel.innerHTML += `<option value="${y}" ${y === maxY ? "selected" : ""}>${y}</option>`;
+                }
+
+                document.getElementById("statusBadge").innerHTML =
+                    `✅ Loaded <strong class="text-white">${APP_DATA.metadata.total_raw_detections.toLocaleString()}</strong> raw detections → <strong class="text-orange-400">${APP_DATA.metadata.total_harmonized_cell_days.toLocaleString()}</strong> unified 1km cell-days`;
+
+                renderValidationChart();
+                renderAll();
+            } catch (err) {
+                document.getElementById("statusBadge").textContent =
+                    "❌ Error loading dashboard_data.json. Run 'uvicorn main:app --reload' and open http://127.0.0.1:8000";
+                console.error(err);
+            }
+        }
+
+        bootstrap();
+    </script>
+</body>
+
+</html>

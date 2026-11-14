@@ -1,0 +1,16 @@
+# Environment & Secrets
+.env
+venv/
+__pycache__/
+*.py[cod]
+
+# Raw NASA Archive Dumps (keep repo lightweight; only commit processed JSON)
+*.zip
+data/raw/
+*.csv
+!sample_*.csv
+
+# OS & Editor
+.vscode/
+.DS_Store
+Thumbs.db
